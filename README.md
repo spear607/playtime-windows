@@ -43,7 +43,9 @@ The build uses the Windows .NET Framework C# compiler and WPF assemblies. No NuG
 
 ## Release status
 
-Version 0.1.0 is an initial preview. Local verification is described in the delivery report; do not infer support for all games from one successful game test. Administrator event mode, sleep on different hardware and protected/anti-cheat processes need broader validation. No auto-updater is included.
+Version 0.1.1 adds a desktop-shortcut picker that combines personal and public desktop shortcuts. The running-app picker now shows only programs with a visible window and displays each window title and executable path.
+
+This is an early preview. Do not infer support for all games from a small number of successful game tests. Administrator event mode, sleep on different hardware and protected/anti-cheat processes need broader validation. No auto-updater is included.
 
 ## Languages and contribution
 

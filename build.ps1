@@ -1,5 +1,6 @@
 param([switch]$Package)
 $ErrorActionPreference = 'Stop'
+$version = '0.1.1'
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $compiler = Join-Path $framework 'csc.exe'
 $wpf = Join-Path $framework 'WPF'
@@ -28,7 +29,7 @@ if ($Package) {
  New-Item -ItemType Directory -Path $stage -Force | Out-Null
  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Playtime.exe'),(Join-Path $PSScriptRoot 'README.md'),(Join-Path $PSScriptRoot 'LICENSE') -Destination $stage
  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs') -Destination $stage -Recurse
- $zip = Join-Path $dist 'Playtime-v0.1.0-windows-x64.zip'
+ $zip = Join-Path $dist ("Playtime-v$version-windows-x64.zip")
  Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
  Get-FileHash -LiteralPath $zip -Algorithm SHA256 | ForEach-Object { $_.Hash.ToLower() + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
  Write-Host $zip
