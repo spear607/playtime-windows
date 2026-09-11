@@ -1,0 +1,19 @@
+Add a game
+Choose Add game and browse for, or drop, an EXE or desktop shortcut. Confirm its name and save. Shortcut targets, arguments and working folders are resolved automatically. Then launch the game as usual. No tracking shortcut is required.
+
+Launchers
+If the selected file is a launcher, start the game first and use Choose a running process. Advanced settings match both the process name and game folder. Do not include a launcher that stays running after the game exits.
+
+Background and permissions
+Closing the window keeps tracking in the tray. Pause, resume or quit there. Start at sign-in is optional and off by default. Standard-user mode checks every 3 seconds. Administrator mode attempts Windows process events and falls back if unavailable; periodic reconciliation remains enabled. No service or scheduled task is installed.
+
+Counting rules
+This measures process runtime, including background and idle time, not focused play. Already-running games are counted from detection, never retrospectively. Polling may miss up to roughly 3 seconds at each boundary, or 6 seconds for a full session; exit confirmation takes a few more seconds. Sleep, pause and quitting end a segment. Segments of the same process do not increase play count again. A crash can lose roughly the last 6 seconds; a long scheduling gap ends the segment conservatively. Manual entries do not increase play count.
+
+Data and updates
+Data lives in the data folder beside the executable. JSON backup imports merge records, skip duplicate IDs, preserve current language/startup preferences and create a pre-import backup. Legacy import expects games.json and data/sessions. Deleted sessions move to data/trash; removing a game keeps history. Quit from the tray before updates and preserve data when replacing application files.
+
+Removal and limitations
+Disable start at sign-in before quitting and deleting the app folder. Extract the portable ZIP to a writable folder first. No network or telemetry features. Error logs can contain local paths. Protected game processes may be inaccessible; undetected games create no session. Edit paths after moving a game. The first release is unsigned and Windows may show an unknown-publisher warning.
+
+When running as administrator, Windows may block drops from a normal Explorer window. Use Browse instead.

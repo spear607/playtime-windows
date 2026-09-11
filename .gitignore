@@ -1,0 +1,8 @@
+/Playtime.exe
+/data/
+/local/
+/dist/
+/work/
+*.user
+*.suo
+/src/app.ico
