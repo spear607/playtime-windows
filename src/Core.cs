@@ -66,7 +66,7 @@ namespace Playtime {
   }
   public void Log(Exception ex){try{lock(Gate){string p=Path.Combine(Root,"errors.log");if(File.Exists(p)&&new FileInfo(p).Length>1048576)File.Move(p,p+"."+DateTime.UtcNow.Ticks);File.AppendAllText(p,DateTimeOffset.Now.ToString("o")+" "+ex+Environment.NewLine);}}catch{}}
  }
- public class Observed {public string Key {get;set;} public string Path {get;set;} public string Name {get;set;} public DateTimeOffset Started {get;set;}}
+ public class Observed {public string Key {get;set;} public string Path {get;set;} public string Name {get;set;} public string Title {get;set;} public int ProcessId {get;set;} public DateTimeOffset Started {get;set;} public string Display {get{return string.IsNullOrWhiteSpace(Title)?Path:Title+"  —  "+Path;}}}
  public class Running {public Session Session;public double LastSeen,LastSaved;}
  public class Tracker : IDisposable {
   public readonly Store Store;readonly object gate=new object();readonly AutoResetEvent wake=new AutoResetEvent(false);readonly Dictionary<string,Running> active=new Dictionary<string,Running>();
@@ -115,10 +115,17 @@ namespace Playtime {
   [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct ProcessEntry {public uint size,usage,pid;public UIntPtr heap;public uint module,threads,parent;public int priority;public uint flags;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)]public string exe;}
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,EntryPoint="Process32FirstW")]static extern bool ProcessFirst(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,EntryPoint="Process32NextW")]static extern bool ProcessNext(IntPtr snapshot,ref ProcessEntry entry);
+  delegate bool EnumWindowsProc(IntPtr hWnd,IntPtr lParam);
+  [DllImport("user32.dll")]static extern bool EnumWindows(EnumWindowsProc callback,IntPtr lParam);
+  [DllImport("user32.dll")]static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetWindowText(IntPtr hWnd,System.Text.StringBuilder text,int length);
+  [DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr hWnd,out uint processId);
   public static List<Observed> Scan(List<Game> games){var names=new HashSet<string>(games.SelectMany(g=>g.processNames).Select(n=>Path.GetFileNameWithoutExtension(n)),StringComparer.OrdinalIgnoreCase);return ScanNames(names);}
   public static List<Observed> ScanNames(HashSet<string> names){var result=new List<Observed>();IntPtr snapshot=CreateToolhelp32Snapshot(2,0);if(snapshot==new IntPtr(-1))throw new System.ComponentModel.Win32Exception();int self=Process.GetCurrentProcess().Id;
    try{var entry=new ProcessEntry{size=(uint)Marshal.SizeOf(typeof(ProcessEntry))};bool found=ProcessFirst(snapshot,ref entry);while(found){try{string name=Path.GetFileNameWithoutExtension(entry.exe);
-    if(entry.pid!=self&&(names==null||names.Contains(name))){IntPtr h=OpenProcess(0x1000,false,(int)entry.pid);if(h!=IntPtr.Zero){string path=null;try{var b=new System.Text.StringBuilder(32768);int size=b.Capacity;if(QueryFullProcessImageName(h,0,b,ref size))path=b.ToString();}finally{CloseHandle(h);}if(path!=null)using(var p=Process.GetProcessById((int)entry.pid)){DateTimeOffset started=p.StartTime.ToUniversalTime();result.Add(new Observed{Name=name,Path=path,Started=started,Key=entry.pid+":"+started.UtcTicks});}}}
+    if(entry.pid!=self&&(names==null||names.Contains(name))){IntPtr h=OpenProcess(0x1000,false,(int)entry.pid);if(h!=IntPtr.Zero){string path=null;try{var b=new System.Text.StringBuilder(32768);int size=b.Capacity;if(QueryFullProcessImageName(h,0,b,ref size))path=b.ToString();}finally{CloseHandle(h);}if(path!=null)using(var p=Process.GetProcessById((int)entry.pid)){DateTimeOffset started=p.StartTime.ToUniversalTime();result.Add(new Observed{Name=name,Path=path,ProcessId=(int)entry.pid,Started=started,Key=entry.pid+":"+started.UtcTicks});}}}
    }catch{}found=ProcessNext(snapshot,ref entry);}}finally{CloseHandle(snapshot);}return result;}
+  public static List<Observed> ScanVisibleWindows(){var titles=new Dictionary<int,string>();EnumWindows((h,p)=>{if(!IsWindowVisible(h))return true;int length=GetWindowTextLength(h);if(length<=0)return true;var text=new System.Text.StringBuilder(length+1);if(GetWindowText(h,text,text.Capacity)<=0)return true;uint pid;GetWindowThreadProcessId(h,out pid);if(pid>0&&!titles.ContainsKey((int)pid))titles[(int)pid]=text.ToString();return true;},IntPtr.Zero);var result=ScanNames(null).Where(p=>titles.ContainsKey(p.ProcessId)).GroupBy(p=>p.ProcessId).Select(g=>g.First()).ToList();foreach(var p in result)p.Title=titles[p.ProcessId];return result.OrderBy(p=>p.Title,StringComparer.CurrentCultureIgnoreCase).ToList();}
  }
 }
