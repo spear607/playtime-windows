@@ -1,35 +1,90 @@
 # Playtime · 时长统计
 
-A small, local Windows game playtime tracker. Add a game once, then launch it normally.
+<p align="center">
+  <strong>A lightweight, local Windows playtime tracker for non-Steam games.</strong><br>
+  简洁的 Windows 本地游戏时长统计器。添加一次，之后照常启动游戏即可。
+</p>
 
-简洁的 Windows 本地游戏时长统计器。添加游戏后照常启动，后台自动记录。没有账号、遥测、联网请求或复杂图表。
+<p align="center">
+  <a href="https://github.com/spear607/playtime-windows/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/spear607/playtime-windows?display_name=tag&sort=semver"></a>
+  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/spear607/playtime-windows"></a>
+  <img alt="Local data" src="https://img.shields.io/badge/data-local%20only-28824B">
+</p>
 
-## Features
+<p align="center">
+  <a href="https://github.com/spear607/playtime-windows/releases/latest"><strong>Download the latest Windows release</strong></a>
+  ·
+  <a href="https://github.com/spear607/playtime-windows/issues">Report a problem</a>
+</p>
 
-- Drop an EXE or `.lnk`; resolve the actual shortcut target, arguments and working directory.
-- Background detection of configured games only; tray pause, resume and quit.
-- Total playtime, play count and session history; manual time entries and removable sessions.
-- Simplified Chinese, Traditional Chinese, English and Japanese, with system-language selection.
-- JSON data, mergeable backups and explicit legacy import.
-- Optional start at Windows sign-in, disabled by default. No service or scheduled task.
+<p align="center">
+  <img src="docs/images/overview-en.png" alt="Playtime overview showing total playtime, sessions and games" width="820">
+</p>
 
-## Run
+Playtime automatically records how long selected Windows games are running. It is designed for people who want Steam-style playtime for local or non-Steam games without creating an account, managing a large game library, or sending activity to a cloud service.
 
-Extract the Windows x64 ZIP into a writable folder and run `Playtime.exe`. Target: Windows 10/11 x64 with .NET Framework 4.8 or later. No .NET SDK or third-party runtime is needed for users whose Windows installation already provides that framework. The binary is unsigned.
+时长统计会自动记录你添加的 Windows 游戏运行了多久。它适合希望统计本地游戏、非 Steam 游戏时长，同时又不需要账号、云同步和复杂游戏库管理的人。
 
-The window closes to the system tray. Use **Quit** in the tray to stop tracking. Automatic sign-in startup is opt-in. Do not run directly from inside the ZIP or place the app under a read-only system directory.
+## Why Playtime?
 
-普通用户每 3 秒检查；管理员权限下尝试进程事件，失败时回退。管理员权限不是运行要求。是否使用事件取决于 Windows 的权限与组件可用性。空闲事件模式每 15 秒校验，活动会话每 3 秒更新；游戏范围由进程名和目录共同限定。
+- **Launch normally** — you do not need to use a special tracking shortcut.
+- **Easy game setup** — choose a desktop shortcut, an EXE, or a visible running game window.
+- **Automatic tracking** — records total time, play count, and individual sessions in the background.
+- **Local and private** — no account, telemetry, advertising, or network requests.
+- **Portable data** — readable JSON files, backup import/export, and no database server.
+- **Small scope** — no achievements, social feed, cover-art library, or complex charts.
+- **Four languages** — Simplified Chinese, Traditional Chinese, English, and Japanese.
 
-## Data and accuracy
+## Quick start
 
-`data/settings.json` stores games and language. `data/sessions/*.json` stores completed segments; `data/active/*.json` stores heartbeats. Data is never bundled in releases. Startup registration is a current-user Run key, enabled only by the user's checkbox.
+1. Open the [latest release](https://github.com/spear607/playtime-windows/releases/latest) and download `Playtime-*-windows-x64.zip`.
+2. Extract the ZIP into a writable folder. Do not run it from inside the ZIP.
+3. Run `Playtime.exe`.
+4. Select **Add game**, then choose a desktop shortcut, an EXE, or a running game window.
+5. Launch the game normally. Closing the Playtime window keeps tracking active in the system tray.
 
-This measures **process runtime**, including background/idle time. It is not an active-input or attention tracker. Detection starts at observation, not retroactively. Polling can undercount by roughly 3 seconds at each boundary (about 6 seconds for a complete session). A six-second absence grace period prevents immediate churn; a briefly inaccessible process that returns with the same identity within that grace period is treated as continuous. Games shorter than the polling interval can be missed. Sleep notifications end the current segment; a scheduling gap over 20 seconds also ends it conservatively. Heartbeats are saved about every 6 seconds while active. Long pauses in OS scheduling, inaccessible processes and unusual launchers can affect results. Administrator mode may block drag-and-drop from a normal Explorer window; use Browse instead.
+Windows 10/11 x64 with .NET Framework 4.8 or later is supported. The portable executable is currently unsigned; each release includes a SHA-256 checksum.
 
-Pause/resume and restart segments share a process identity so they do not inflate play count. Manual entries increase duration but not count. Backups merge by game/session ID, keep existing definitions on ID conflicts, and do not alter language or startup preferences. Import paths are never executed automatically. Removing a game keeps history. Deleted sessions move to `data/trash`.
+### 添加游戏
 
-Update: quit the tray app, back up `data`, replace application files, preserve `data`. To uninstall, disable start at sign-in, quit and remove the directory.
+1. 在 [Releases](https://github.com/spear607/playtime-windows/releases/latest) 下载 Windows x64 压缩包并解压。
+2. 运行 `Playtime.exe`，点击“添加游戏”。
+3. 可以从个人与公共桌面图标中选择，也可以选择 EXE，或从当前可见的游戏窗口中选择。
+4. 保存后照常启动游戏。关闭主窗口后，程序会留在系统托盘继续统计。
+
+## What is recorded?
+
+- Total playtime and play count for each configured game
+- Start time, end time, duration, and status for every session
+- Manual corrections, removable sessions, and interrupted-session recovery
+- Optional startup when signing in to Windows, disabled by default
+
+All configuration and history stays beside the application in the `data` folder:
+
+```text
+data/
+├── settings.json
+├── sessions/
+├── active/
+└── trash/
+```
+
+Back up the `data` folder or use the built-in JSON export. Release packages never include local user data.
+
+## Accuracy and limitations
+
+Playtime measures **process runtime**, including time spent idle or in the background. It does not measure keyboard, controller, or foreground-window activity.
+
+The tracker listens for process changes when Windows permits it and performs lightweight checks while a session is active. Detection can be a few seconds late at either boundary. Very short games, unusual multi-stage launchers, protected processes, sleep transitions, and inaccessible executable paths can affect results. Advanced settings let you specify the real game process and its installation directory.
+
+Administrator access is not normally required. Some protected or anti-cheat games may expose less process information to a standard user.
+
+## Update or remove
+
+To update, quit Playtime from the tray, keep the existing `data` folder, and replace the other application files with the new release.
+
+To remove it, disable “Start when I sign in to Windows,” quit the tray application, and delete its folder. Playtime does not install a service or scheduled task.
 
 ## Build and verify
 
@@ -39,16 +94,14 @@ Update: quit the tray app, back up `data`, replace application files, preserve `
 .\build.ps1 -Package
 ```
 
-The build uses the Windows .NET Framework C# compiler and WPF assemblies. No NuGet dependencies. CI builds and tests on Windows and uploads a portable ZIP plus SHA-256 checksum. Source is C# 5 compatible. `--background` hides the initial window; `--data-dir PATH` isolates test data.
+The project uses the Windows .NET Framework C# compiler and WPF assemblies. It has no NuGet dependencies or third-party runtime. GitHub Actions builds and tests the project on Windows. Source code remains compatible with C# 5.
 
-## Release status
+## Project status
 
-Version 0.1.1 adds a desktop-shortcut picker that combines personal and public desktop shortcuts. The running-app picker now shows only programs with a visible window and displays each window title and executable path.
+Version 0.1.1 is an early preview. It has automated checks for tracking state transitions, crash recovery, backup behavior, localization completeness, and the main UI flows. More real-world testing is still needed for launchers, anti-cheat games, hardware sleep, and different Windows configurations.
 
-This is an early preview. Do not infer support for all games from a small number of successful game tests. Administrator event mode, sleep on different hardware and protected/anti-cheat processes need broader validation. No auto-updater is included.
+Focused bug reports and translation corrections are welcome through [GitHub Issues](https://github.com/spear607/playtime-windows/issues).
 
-## Languages and contribution
+## License
 
-UI strings are centralized in `src/Language.cs`; help is in `docs/help.*.txt`. All four languages must cover the same UI keys. Translation review from native speakers is welcome. Keep contributions focused on easy setup, reliable tracking, accessibility and portability instead of complex analytics.
-
-MIT license. See `LICENSE`.
+[MIT](LICENSE) © 2026 Playtime contributors
