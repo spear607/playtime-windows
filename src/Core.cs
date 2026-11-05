@@ -28,7 +28,9 @@ namespace Playtime {
  public class Backup {public int schemaVersion=1;public Config config;public List<Session> sessions=new List<Session>();}
  public class Store {
   public readonly string Root; public readonly object Gate=new object();
-  readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=67108864};
+  const long MaxBackupBytes=32L*1024*1024;
+   const int MaxBackupSessions=10000;
+   readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=67108864};
   public Config Config; public List<Session> Sessions=new List<Session>();
   public string Warning;
   public Store(string root) {
@@ -42,7 +44,16 @@ namespace Playtime {
   }
   public static void ValidateConfig(Config c){if(c==null||c.games==null||c.games.Count>500)throw new InvalidDataException("Invalid configuration");var ids=new HashSet<string>();foreach(var g in c.games){ValidateGame(g);if(!ids.Add(g.id))throw new InvalidDataException("Duplicate game ID");}}
   public static void ValidateGame(Game g){if(g==null||!SafeId(g.id)||string.IsNullOrWhiteSpace(g.name)||g.processNames==null||g.processNames.Length==0||g.processNames.Any(n=>string.IsNullOrWhiteSpace(n)||n.IndexOfAny(new char[]{'\\','/',':','*','?'})>=0)||string.IsNullOrWhiteSpace(g.trackingDirectory)||!Path.IsPathRooted(g.trackingDirectory))throw new InvalidDataException("Invalid game configuration");}
-  static bool SafeId(string s){return !string.IsNullOrEmpty(s)&&s.Length<100&&s.All(c=>char.IsLetterOrDigit(c)||c=='_'||c=='-');}
+  static bool LocalDrivePath(string path){if(string.IsNullOrWhiteSpace(path))return false;try{string root=Path.GetPathRoot(path);return root!=null&&root.Length==3&&char.IsLetter(root[0])&&root[1]==':'&&(root[2]=='\\'||root[2]=='/');}catch{return false;}}
+   static void ValidateImportedGame(Game g){
+    ValidateGame(g);
+    if(g.name.Length>512||g.processNames.Length>32||g.processNames.Any(n=>n.Length>260)||
+       !LocalDrivePath(g.executable)||g.executable.Length>32767||!string.Equals(Path.GetExtension(g.executable),".exe",StringComparison.OrdinalIgnoreCase)||
+       (g.arguments!=null&&g.arguments.Length>8192)||
+       (!string.IsNullOrWhiteSpace(g.workingDirectory)&&(!LocalDrivePath(g.workingDirectory)||g.workingDirectory.Length>32767))||
+       !LocalDrivePath(g.trackingDirectory)||g.trackingDirectory.Length>32767)throw new InvalidDataException("Invalid imported game");
+   }
+   static bool SafeId(string s){return !string.IsNullOrEmpty(s)&&s.Length<100&&s.All(c=>char.IsLetterOrDigit(c)||c=='_'||c=='-');}
   public static void ValidateSession(Session s){DateTimeOffset dt;if(s==null||!SafeId(s.id)||!SafeId(s.gameId)||double.IsNaN(s.durationSeconds)||double.IsInfinity(s.durationSeconds)||s.durationSeconds<0||s.durationSeconds>3155760000||!DateTimeOffset.TryParse(s.startTime,out dt))throw new InvalidDataException("Invalid session");}
   public void Atomic(string path,object data){string tmp=path+"."+Guid.NewGuid().ToString("N")+".tmp";try{File.WriteAllText(tmp,json.Serialize(data),new System.Text.UTF8Encoding(false));for(int attempt=0;;attempt++){try{if(File.Exists(path))File.Replace(tmp,path,null);else File.Move(tmp,path);break;}catch(IOException){if(attempt>=3)throw;Thread.Sleep(30);}}}finally{if(File.Exists(tmp))File.Delete(tmp);}}
   public void SaveConfig(){lock(Gate){ValidateConfig(Config);Atomic(Path.Combine(Root,"settings.json"),Config);}}
@@ -50,19 +61,80 @@ namespace Playtime {
   void WriteSession(Session s){Atomic(Path.Combine(Root,"sessions",s.id+".json"),s);}
   public void Finish(Session s){lock(Gate){WriteSession(s);Sessions.RemoveAll(x=>x.id==s.id);Sessions.Add(s);string path=Path.Combine(Root,"active",s.id+".json");if(File.Exists(path))File.Delete(path);}}
   public void Delete(Session s){lock(Gate){string src=Path.Combine(Root,"sessions",s.id+".json");if(File.Exists(src))File.Move(src,Path.Combine(Root,"trash",s.id+"-"+DateTime.UtcNow.Ticks+".json"));Sessions.RemoveAll(x=>x.id==s.id);}}
-  public void Export(string path){lock(Gate){var list=Sessions.ToList();foreach(string f in Directory.GetFiles(Path.Combine(Root,"active"),"*.json")){var s=json.Deserialize<Session>(File.ReadAllText(f));ValidateSession(s);if(!list.Any(x=>x.id==s.id)){s.status="interrupted";s.endTime=s.lastHeartbeat;list.Add(s);}}Atomic(path,new Backup{config=Config,sessions=list});}}
-  public int Import(string path){
-   var backup=json.Deserialize<Backup>(File.ReadAllText(path));if(backup==null||backup.schemaVersion!=1||backup.sessions==null)throw new InvalidDataException("Invalid backup");ValidateConfig(backup.config);foreach(var s in backup.sessions)ValidateSession(s);
-   lock(Gate){Export(Path.Combine(Root,"before-import-"+DateTime.Now.ToString("yyyyMMdd-HHmmss-fff")+".json"));
-    foreach(var g in backup.config.games)if(!Config.games.Any(x=>x.id==g.id))Config.games.Add(g);
-    int n=0;foreach(var s in backup.sessions)if(!Sessions.Any(x=>x.id==s.id)&&!File.Exists(Path.Combine(Root,"active",s.id+".json"))){WriteSession(s);Sessions.Add(s);n++;}SaveConfig();return n;}
-  }
-  public int ImportLegacy(string root){
+  public void Export(string path){lock(Gate){var list=Sessions.ToList();foreach(string f in Directory.GetFiles(Path.Combine(Root,"active"),"*.json")){var s=json.Deserialize<Session>(File.ReadAllText(f));ValidateSession(s);if(!list.Any(x=>x.id==s.id)){s.status="interrupted";s.endTime=s.lastHeartbeat;list.Add(s);}}var backup=new Backup{config=Config,sessions=list};if(list.Count>MaxBackupSessions||System.Text.Encoding.UTF8.GetByteCount(json.Serialize(backup))>MaxBackupBytes)throw new InvalidDataException("Backup too large to restore; copy the data folder instead");Atomic(path,backup);}}
+  string ReadBoundedBackup(string path){
+    using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){
+     if(stream.Length>MaxBackupBytes)throw new InvalidDataException("Backup too large");
+     using(var reader=new StreamReader(stream,System.Text.Encoding.UTF8,true)){
+      var text=new System.Text.StringBuilder();var chunk=new char[8192];int count;
+      while((count=reader.Read(chunk,0,chunk.Length))>0){if(text.Length>MaxBackupBytes-count)throw new InvalidDataException("Backup too large");text.Append(chunk,0,count);}
+      return text.ToString();
+     }
+    }
+   }
+   public int Import(string path){
+
+    var backup=json.Deserialize<Backup>(ReadBoundedBackup(path));
+    if(backup==null||backup.schemaVersion!=1||backup.sessions==null||backup.sessions.Count>MaxBackupSessions)throw new InvalidDataException("Invalid backup");
+    ValidateConfig(backup.config);
+    var incomingIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var incomingGameIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach(var g in backup.config.games){ValidateImportedGame(g);if(!incomingGameIds.Add(g.id))throw new InvalidDataException("Duplicate imported game ID");}
+    foreach(var s in backup.sessions){ValidateSession(s);if(!incomingIds.Add(s.id))throw new InvalidDataException("Duplicate session ID");}
+    lock(Gate){
+     var merged=new Config{schemaVersion=Config.schemaVersion,language=Config.language,onboardingComplete=Config.onboardingComplete,games=Config.games.ToList()};
+     var gameIds=new HashSet<string>(merged.games.Select(g=>g.id),StringComparer.OrdinalIgnoreCase);
+     foreach(var g in backup.config.games)if(gameIds.Add(g.id))merged.games.Add(g);
+     ValidateConfig(merged);
+     var loadedIds=new HashSet<string>(Sessions.Select(s=>s.id),StringComparer.OrdinalIgnoreCase);
+     var sessionFiles=new HashSet<string>(Directory.GetFiles(Path.Combine(Root,"sessions"),"*.json").Select(f=>Path.GetFileNameWithoutExtension(f)),StringComparer.OrdinalIgnoreCase);
+     var activePaths=Directory.GetFiles(Path.Combine(Root,"active"),"*.json").ToDictionary(f=>Path.GetFileNameWithoutExtension(f),f=>f,StringComparer.OrdinalIgnoreCase);
+     var additions=new List<Session>();
+     foreach(var s in backup.sessions){
+      if(loadedIds.Contains(s.id))continue;
+      if(sessionFiles.Contains(s.id))throw new InvalidDataException("Damaged session ID already exists on disk");
+      string activePath;
+      if(activePaths.TryGetValue(s.id,out activePath)){
+       try{var activeSession=json.Deserialize<Session>(File.ReadAllText(activePath));ValidateSession(activeSession);if(!string.Equals(activeSession.id,s.id,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Conflicting active session");}catch(Exception ex){throw new InvalidDataException("Invalid active session collision",ex);}
+       continue;
+      }
+      additions.Add(s);
+     }
+     if(additions.Count==0&&merged.games.Count==Config.games.Count)return 0;
+     var mergedSessions=Sessions.Concat(additions).ToList();
+      var staged=new List<KeyValuePair<string,string>>();var committed=new List<string>();
+     try{
+      foreach(var s in additions){
+       string destination=Path.Combine(Root,"sessions",s.id+".json");
+       string temporary=Path.Combine(Root,"sessions",".import-"+Guid.NewGuid().ToString("N")+".tmp");
+
+       using(var file=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None)){
+        staged.Add(new KeyValuePair<string,string>(temporary,destination));
+        using(var writer=new StreamWriter(file,new System.Text.UTF8Encoding(false)))writer.Write(json.Serialize(s));
+       }
+      }
+      Export(Path.Combine(Root,"before-import-"+Guid.NewGuid().ToString("N")+".json"));
+      foreach(var pair in staged){File.Move(pair.Key,pair.Value);committed.Add(pair.Value);}
+      Atomic(Path.Combine(Root,"settings.json"),merged);
+      Config=merged;Sessions=mergedSessions;return additions.Count;
+     }catch(Exception original){
+      var rollbackErrors=new List<Exception>();
+      foreach(string destination in committed)try{File.Delete(destination);}catch(Exception ex){rollbackErrors.Add(ex);Log(ex);}
+      if(rollbackErrors.Count>0)throw new IOException("Import failed and rollback was incomplete; inspect the data folder before trying again",new AggregateException(new[]{original}.Concat(rollbackErrors)));
+      throw;
+     }finally{foreach(var pair in staged)try{if(File.Exists(pair.Key))File.Delete(pair.Key);}catch(Exception ex){Log(ex);}}
+    }
+   }
+   public int ImportLegacy(string root){
    // Legacy data is explicitly selected by the user; never load it into a public release.
    var c=json.Deserialize<Config>(File.ReadAllText(Path.Combine(root,"games.json")));
    foreach(var g in c.games){g.enabled=true;if(g.processNames==null||g.processNames.Length==0)g.processNames=new[]{Path.GetFileNameWithoutExtension(g.executable)};if(string.IsNullOrEmpty(g.trackingDirectory))g.trackingDirectory=Path.GetDirectoryName(g.executable);}ValidateConfig(c);
    var b=new Backup{config=c};foreach(string f in Directory.GetFiles(Path.Combine(root,"data","sessions"),"*.json")){var s=json.Deserialize<Session>(File.ReadAllText(f));if(s.startTime==null)continue;s.runKey="legacy-"+s.id;ValidateSession(s);b.sessions.Add(s);}
-   string temp=Path.Combine(Root,"legacy-import.json");lock(Gate)Atomic(temp,b);try{return Import(temp);}finally{File.Delete(temp);}
+   string temp=Path.Combine(Root,"legacy-import-"+Guid.NewGuid().ToString("N")+".json");
+    bool owned=false;
+    try{using(var file=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)){
+      owned=true;using(var writer=new StreamWriter(file,new System.Text.UTF8Encoding(false)))writer.Write(json.Serialize(b));
+     }return Import(temp);}finally{if(owned&&File.Exists(temp))File.Delete(temp);}
   }
   public void Log(Exception ex){try{lock(Gate){string p=Path.Combine(Root,"errors.log");if(File.Exists(p)&&new FileInfo(p).Length>1048576)File.Move(p,p+"."+DateTime.UtcNow.Ticks);File.AppendAllText(p,DateTimeOffset.Now.ToString("o")+" "+ex+Environment.NewLine);}}catch{}}
  }
@@ -80,18 +152,19 @@ namespace Playtime {
   void StopEvents(){foreach(var watcher in new[]{startEvents,stopEvents})if(watcher!=null){try{watcher.Stop();}catch{}watcher.Dispose();}startEvents=null;stopEvents=null;EventMode=false;}
   void Signal(){if(!stopping)try{wake.Set();}catch(ObjectDisposedException){}}
   void Power(object sender,PowerModeChangedEventArgs e){if(e.Mode==PowerModes.Suspend)Suspend();else if(e.Mode==PowerModes.Resume)Resume();}
-  public void Suspend(){lock(gate){suspended=true;FinishAll("sleep");lastTick=-1;}wake.Set();}
-  public void Resume(){lock(gate){suspended=false;lastTick=-1;}wake.Set();}
-  public void SetPaused(bool value){lock(gate){paused=value;if(value)FinishAll("paused");else Error=null;lastTick=-1;}wake.Set();}
-  public void Changed(){wake.Set();}
+  public void Suspend(){lock(gate){if(stopping)return;suspended=true;FinishAll("sleep");lastTick=-1;}Signal();}
+  public void Resume(){lock(gate){if(stopping)return;suspended=false;lastTick=-1;}Signal();}
+  public void SetPaused(bool value){lock(gate){if(stopping)return;paused=value;if(value)FinishAll("paused");else Error=null;lastTick=-1;}Signal();}
+  public void Changed(){Signal();}
   public List<Session> Snapshot(){lock(gate){lock(Store.Gate){return Store.Sessions.Concat(active.Values.Select(x=>x.Session)).Select(Clone).ToList();}}}
   static Session Clone(Session s){return new Session{id=s.id,gameId=s.gameId,gameName=s.gameName,runKey=s.runKey,status=s.status,startTime=s.startTime,endTime=s.endTime,lastHeartbeat=s.lastHeartbeat,durationSeconds=s.durationSeconds};}
-  void Loop(){while(!stopping){try{List<Game> games;lock(Store.Gate)games=Store.Config.games.Where(g=>g.enabled).ToList();
+  void Loop(){try{while(!stopping){try{List<Game> games;lock(Store.Gate)games=Store.Config.games.Where(g=>g.enabled).ToList();
     if(!paused&&!suspended&&games.Count>0)Tick(Scan(games),clock.Elapsed.TotalSeconds,DateTimeOffset.Now);else if(games.Count==0)lock(gate)FinishAll("completed");
    }catch(Exception ex){Error="trackingError";Store.Log(ex);try{lock(gate){FinishAll("interrupted");paused=true;}}catch{}}
-   int interval;lock(gate)interval=EventMode&&active.Count==0?15000:3000;wake.WaitOne(interval);if(EventMode)Thread.Sleep(100);
+   int interval;lock(gate)interval=EventMode&&active.Count==0?15000:3000;if(!stopping){wake.WaitOne(interval);if(EventMode)Thread.Sleep(100);}
   }}
-  public void Tick(List<Observed> processes,double now,DateTimeOffset utc){lock(gate){if(paused||suspended)return;
+  finally{try{lock(gate)FinishAll("stopped");}catch(Exception ex){Store.Log(ex);}wake.Dispose();}}
+   public void Tick(List<Observed> processes,double now,DateTimeOffset utc){lock(gate){if(stopping||paused||suspended)return;
    if(lastTick>=0&&now-lastTick>20)FinishAll("interrupted");lastTick=now;
    List<Game> games;lock(Store.Gate)games=Store.Config.games.Where(g=>g.enabled).ToList();
    foreach(string removed in active.Keys.Where(id=>!games.Any(g=>g.id==id)).ToArray())Finish(removed,"completed");
@@ -107,7 +180,7 @@ namespace Playtime {
   public static bool Matches(Game g,Observed p){string dir=System.IO.Path.GetFullPath(g.trackingDirectory).TrimEnd('\\')+"\\";return g.processNames.Any(n=>string.Equals(System.IO.Path.GetFileNameWithoutExtension(n),p.Name,StringComparison.OrdinalIgnoreCase))&&p.Path.StartsWith(dir,StringComparison.OrdinalIgnoreCase);}
   void Finish(string id,string state){var r=active[id];r.Session.status=state;r.Session.endTime=r.Session.lastHeartbeat;Store.Finish(r.Session);active.Remove(id);}
   void FinishAll(string state){foreach(string id in active.Keys.ToArray())Finish(id,state);}
-  public void Dispose(){stopping=true;StopEvents();wake.Set();if(thread!=null)thread.Join(5000);lock(gate)FinishAll("stopped");SystemEvents.PowerModeChanged-=Power;wake.Dispose();}
+  public void Dispose(){if(stopping)return;stopping=true;SystemEvents.PowerModeChanged-=Power;StopEvents();try{wake.Set();}catch(ObjectDisposedException){}if(thread!=null)thread.Join(5000);else{lock(gate)FinishAll("stopped");wake.Dispose();}}
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode)]static extern bool QueryFullProcessImageName(IntPtr h,int flags,System.Text.StringBuilder path,ref int size);
   [DllImport("kernel32.dll")]static extern IntPtr OpenProcess(int access,bool inherit,int pid);
   [DllImport("kernel32.dll")]static extern bool CloseHandle(IntPtr handle);

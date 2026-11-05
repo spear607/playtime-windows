@@ -46,6 +46,10 @@ Playtime automatically records how long selected Windows games are running. It i
 
 Windows 10/11 x64 with .NET Framework 4.8 or later is supported. The portable executable is currently unsigned; each release includes a SHA-256 checksum.
 
+**Safety:** Launching a game from its card shows the exact local EXE path, arguments, and working directory for confirmation. Starting the original game EXE normally needs no confirmation and is still tracked. The in-app launcher and icon loader reject UNC paths, mapped network drives, and reparse points along the selected path; if a local game lives behind a junction/symlink, select its real path instead. Only import backups you trust; an imported game can still point to an executable on your PC, and process tracking alone does not execute it.
+
+**安全提示：**从游戏卡片点击“启动”时会显示 EXE 路径、参数和工作目录，确认后才会运行；照常双击游戏文件不受影响。请只导入可信的备份文件；导入和自动计时本身不会启动备份中的程序。
+
 ### 添加游戏
 
 1. 在 [Releases](https://github.com/spear607/playtime-windows/releases/latest) 下载 Windows x64 压缩包并解压。
@@ -70,7 +74,7 @@ data/
 └── trash/
 ```
 
-Back up the `data` folder or use the built-in JSON export. Release packages never include local user data.
+Back up the `data` folder or use the built-in JSON export. JSON backups are limited to 32 MiB and 10,000 sessions; for larger collections, copy the `data` folder instead. Release packages never include local user data.
 
 ## Accuracy and limitations
 
