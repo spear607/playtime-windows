@@ -19,7 +19,39 @@ class CoreTests {
   Assert(!Tracker.Matches(Game(),new Observed{Name="game",Path=Path.Combine(root+"other","game.exe")}),"same name outside tracking folder excluded");
   var activeBackup=New("active-export");activeBackup.SaveActive(new Session{gameId="game",gameName="Test",runKey="game:1",status="running",startTime=date.ToString("o"),lastHeartbeat=date.ToString("o"),durationSeconds=3});activeBackup.Export(Path.Combine(root,"active.json"));dest=New("active-import");dest.Import(Path.Combine(root,"active.json"));Assert(dest.Sessions.Count==1&&dest.Sessions[0].status=="interrupted","backup includes active heartbeat safely");
   Assert(activeBackup.Import(Path.Combine(root,"active.json"))==0&&activeBackup.Sessions.Count==0,"import skips session currently being tracked");
-  foreach(string lang in new[]{"zh-CN","zh-TW","en","ja"}){L.Set(lang);Assert(L.Keys.All(k=>!string.IsNullOrWhiteSpace(L.T(k))),"localization complete "+lang);}
+  var source=New("transaction-source");
+   source.Finish(new Session{id="tx-one",gameId="game",gameName="Test",status="completed",startTime=date.ToString("o"),durationSeconds=1});
+   source.Finish(new Session{id="tx-two",gameId="game",gameName="Test",status="completed",startTime=date.ToString("o"),durationSeconds=2});
+   string txBackup=Path.Combine(root,"transaction.json");source.Export(txBackup);
+   var transactional=New("transaction-destination");string settings=File.ReadAllText(Path.Combine(transactional.Root,"settings.json"));
+   Directory.CreateDirectory(Path.Combine(transactional.Root,"sessions","tx-two.json"));
+   rejected=false;try{transactional.Import(txBackup);}catch(IOException){rejected=true;}
+   Assert(rejected&&transactional.Sessions.Count==0&&transactional.Config.games.Count==1&&File.ReadAllText(Path.Combine(transactional.Root,"settings.json"))==settings&&!File.Exists(Path.Combine(transactional.Root,"sessions","tx-one.json")),"failed import rolls back newly moved sessions and keeps settings");
+   var damaged=New("damaged-collision");string damagedPath=Path.Combine(damaged.Root,"sessions","tx-one.json");File.WriteAllText(damagedPath,"{broken json");
+   rejected=false;try{damaged.Import(txBackup);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&File.ReadAllText(damagedPath)=="{broken json"&&damaged.Sessions.Count==0,"import never overwrites an unreadable existing session");
+   string legacyDir=Path.Combine(root,"legacy-source");Directory.CreateDirectory(Path.Combine(legacyDir,"data","sessions"));
+   File.Copy(Path.Combine(source.Root,"settings.json"),Path.Combine(legacyDir,"games.json"));
+   string legacySentinel=Path.Combine(damaged.Root,"legacy-import.json");File.WriteAllText(legacySentinel,"keep my original file");
+   damaged.ImportLegacy(legacyDir);
+   Assert(File.ReadAllText(legacySentinel)=="keep my original file","legacy import preserves an existing file with the former temp name");
+   source.Config.games[0].executable=@"\\server\share\game.exe";string remoteBackup=Path.Combine(root,"remote-backup.json");source.Export(remoteBackup);
+   var rejectRemote=New("reject-remote");rejected=false;try{rejectRemote.Import(remoteBackup);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&rejectRemote.Sessions.Count==0&&rejectRemote.Config.games.Count==1,"import rejects remote executable without probing it");
+   source.Config.games[0].executable=Path.Combine(root,"game.exe");source.Config.games[0].arguments=new string('x',8193);
+   string oversizedArgs=Path.Combine(root,"oversized-arguments.json");source.Export(oversizedArgs);rejected=false;try{rejectRemote.Import(oversizedArgs);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&rejectRemote.Sessions.Count==0,"import rejects excessively long launch arguments");
+   source.Config.games[0].arguments="";source.Finish(new Session{id="TX-ONE",gameId="game",gameName="Test",status="completed",startTime=date.ToString("o"),durationSeconds=1});
+   string duplicateBackup=Path.Combine(root,"duplicate.json");source.Export(duplicateBackup);rejected=false;try{rejectRemote.Import(duplicateBackup);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&rejectRemote.Sessions.Count==0,"import rejects duplicate session IDs ignoring Windows path case");
+   var oversized=New("oversized");string big=Path.Combine(root,"oversized.json");using(var f=new FileStream(big,FileMode.CreateNew))f.SetLength(32L*1024*1024+1);
+   rejected=false;try{oversized.Import(big);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&oversized.Sessions.Count==0,"oversized backup rejected before deserialization");
+   for(int i=0;i<10001;i++)oversized.Sessions.Add(new Session{gameId="game",gameName="Test",startTime=date.ToString("o")});
+   string tooManyExport=Path.Combine(root,"too-many.json");rejected=false;try{oversized.Export(tooManyExport);}catch(InvalidDataException){rejected=true;}
+   Assert(rejected&&!File.Exists(tooManyExport),"export never creates a backup that exceeds the import session limit");
+   using(var stopped=new Tracker(New("disposed"))){stopped.Dispose();stopped.Tick(Seen(),0,date);Assert(stopped.Snapshot().Count==0,"disposed tracker cannot start a late session");}
+   foreach(string lang in new[]{"zh-CN","zh-TW","en","ja"}){L.Set(lang);Assert(L.Keys.All(k=>!string.IsNullOrWhiteSpace(L.T(k))),"localization complete "+lang);}
   Console.WriteLine(n+" assertions passed.");
  }
 }
